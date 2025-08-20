@@ -24,6 +24,7 @@ from bot.database.methods import (
     get_all_item_names,
     get_all_items,
     get_all_subcategories,
+    get_category_parent,
     get_user_count,
     select_admins,
     select_all_operations,
@@ -631,40 +632,49 @@ async def process_subcategory_name(message: Message):
 
 async def delete_category_callback_handler(call: CallbackQuery):
     bot, user_id = await get_bot_user_ids(call)
-    TgConfig.STATE[user_id] = 'delete_category'
-    TgConfig.STATE[f'{user_id}_message_id'] = call.message.message_id
-    role = check_role(user_id)
-    if role >= Permission.SHOP_MANAGE:
-        await bot.edit_message_text('Enter category name',
-                                    chat_id=call.message.chat.id,
-                                    message_id=call.message.message_id,
-                                    reply_markup=back("categories_management"))
-        return
-    await call.answer('Insufficient rights')
-
-
-async def process_category_for_delete(message: Message):
-    bot, user_id = await get_bot_user_ids(message)
-    msg = message.text
-    message_id = TgConfig.STATE.get(f'{user_id}_message_id')
     TgConfig.STATE[user_id] = None
-    category = check_category(msg)
-    await bot.delete_message(chat_id=message.chat.id,
-                             message_id=message.message_id)
-    if not category:
-        await bot.edit_message_text(chat_id=message.chat.id,
-                                    message_id=message_id,
-                                    text='❌ Category not deleted (does not exist)',
-                                    reply_markup=back('categories_management'))
+    role = check_role(user_id)
+    if role < Permission.SHOP_MANAGE:
+        await call.answer('Insufficient rights')
         return
-    delete_category(msg)
-    await bot.edit_message_text(chat_id=message.chat.id,
-                                message_id=message_id,
-                                text='✅ Category deleted',
+    categories = get_all_category_names()
+    markup = InlineKeyboardMarkup()
+    for cat in categories:
+        markup.add(InlineKeyboardButton(cat, callback_data=f'delete_cat_{cat}'))
+    markup.add(InlineKeyboardButton('🔙 Back', callback_data='categories_management'))
+    await bot.edit_message_text('Select category to delete:',
+                                chat_id=call.message.chat.id,
+                                message_id=call.message.message_id,
+                                reply_markup=markup)
+
+
+async def delete_category_choose_handler(call: CallbackQuery):
+    bot, user_id = await get_bot_user_ids(call)
+    category = call.data[len('delete_cat_'):]
+    subcats = get_all_subcategories(category)
+    markup = InlineKeyboardMarkup()
+    for sub in subcats:
+        markup.add(InlineKeyboardButton(sub, callback_data=f'delete_cat_{sub}'))
+    markup.add(InlineKeyboardButton(f'🗑️ Delete {category}', callback_data=f'delete_cat_confirm_{category}'))
+    back_parent = get_category_parent(category)
+    back_data = 'delete_category' if back_parent is None else f'delete_cat_{back_parent}'
+    markup.add(InlineKeyboardButton('🔙 Back', callback_data=back_data))
+    await bot.edit_message_text('Choose subcategory or delete:',
+                                chat_id=call.message.chat.id,
+                                message_id=call.message.message_id,
+                                reply_markup=markup)
+
+
+async def delete_category_confirm_handler(call: CallbackQuery):
+    bot, user_id = await get_bot_user_ids(call)
+    category = call.data[len('delete_cat_confirm_'):]
+    delete_category(category)
+    await bot.edit_message_text('✅ Category deleted',
+                                chat_id=call.message.chat.id,
+                                message_id=call.message.message_id,
                                 reply_markup=back('categories_management'))
     admin_info = await bot.get_chat(user_id)
-    logger.info(f"User {user_id} ({admin_info.first_name}) "
-                f'deleted category "{category["name"]}"')
+    logger.info(f"User {user_id} ({admin_info.first_name}) deleted category \"{category}\"")
 
 
 async def update_category_callback_handler(call: CallbackQuery):
@@ -1130,40 +1140,51 @@ async def update_item_infinity(message: Message):
 
 async def delete_item_callback_handler(call: CallbackQuery):
     bot, user_id = await get_bot_user_ids(call)
-    TgConfig.STATE[f'{user_id}_message_id'] = call.message.message_id
-    TgConfig.STATE[user_id] = 'process_removing_item'
-    role = check_role(user_id)
-    if role >= Permission.SHOP_MANAGE:
-        await bot.edit_message_text('🏷️ Įveskite prekės pavadinimą',
-                                    chat_id=call.message.chat.id,
-                                    message_id=call.message.message_id,
-                                    reply_markup=back("goods_management"))
-        return
-    await call.answer('Insufficient rights')
-
-
-async def delete_str_item(message: Message):
-    bot, user_id = await get_bot_user_ids(message)
-    msg = message.text
     TgConfig.STATE[user_id] = None
-    message_id = TgConfig.STATE.get(f'{user_id}_message_id')
-    item = check_item(msg)
-    await bot.delete_message(chat_id=message.chat.id,
-                             message_id=message.message_id)
-    if not item:
-        await bot.edit_message_text(chat_id=message.chat.id,
-                                    message_id=message_id,
-                                    text='❌ Item not deleted (does not exist)',
-                                    reply_markup=back('goods_management'))
+    role = check_role(user_id)
+    if role < Permission.SHOP_MANAGE:
+        await call.answer('Insufficient rights')
         return
-    delete_item(msg)
-    await bot.edit_message_text(chat_id=message.chat.id,
-                                message_id=message_id,
-                                text='✅ Item deleted',
+    categories = get_all_category_names()
+    markup = InlineKeyboardMarkup()
+    for cat in categories:
+        markup.add(InlineKeyboardButton(cat, callback_data=f'delete_item_cat_{cat}'))
+    markup.add(InlineKeyboardButton('🔙 Back', callback_data='goods_management'))
+    await bot.edit_message_text('Choose category:',
+                                chat_id=call.message.chat.id,
+                                message_id=call.message.message_id,
+                                reply_markup=markup)
+
+
+async def delete_item_category_handler(call: CallbackQuery):
+    bot, user_id = await get_bot_user_ids(call)
+    category = call.data[len('delete_item_cat_'):]
+    subcats = get_all_subcategories(category)
+    items = get_all_item_names(category)
+    markup = InlineKeyboardMarkup()
+    for sub in subcats:
+        markup.add(InlineKeyboardButton(sub, callback_data=f'delete_item_cat_{sub}'))
+    for item in items:
+        markup.add(InlineKeyboardButton(display_name(item), callback_data=f'delete_item_item_{item}'))
+    back_parent = get_category_parent(category)
+    back_data = 'delete_item' if back_parent is None else f'delete_item_cat_{back_parent}'
+    markup.add(InlineKeyboardButton('🔙 Back', callback_data=back_data))
+    await bot.edit_message_text('Choose subcategory or item to delete:',
+                                chat_id=call.message.chat.id,
+                                message_id=call.message.message_id,
+                                reply_markup=markup)
+
+
+async def delete_item_item_handler(call: CallbackQuery):
+    bot, user_id = await get_bot_user_ids(call)
+    item_name = call.data[len('delete_item_item_'):]
+    delete_item(item_name)
+    await bot.edit_message_text('✅ Item deleted',
+                                chat_id=call.message.chat.id,
+                                message_id=call.message.message_id,
                                 reply_markup=back('goods_management'))
     admin_info = await bot.get_chat(user_id)
-    logger.info(f"User {user_id} ({admin_info.first_name}) "
-                f'удалил позицию "{msg}"')
+    logger.info(f"User {user_id} ({admin_info.first_name}) удалил позицию \"{item_name}\"")
 
 
 async def show_bought_item_callback_handler(call: CallbackQuery):
@@ -1224,6 +1245,10 @@ def register_shop_management(dp: Dispatcher) -> None:
                                        lambda c: c.data == 'update_item')
     dp.register_callback_query_handler(delete_item_callback_handler,
                                        lambda c: c.data == 'delete_item')
+    dp.register_callback_query_handler(delete_item_category_handler,
+                                       lambda c: c.data.startswith('delete_item_cat_'))
+    dp.register_callback_query_handler(delete_item_item_handler,
+                                       lambda c: c.data.startswith('delete_item_item_'))
     dp.register_callback_query_handler(show_bought_item_callback_handler,
                                        lambda c: c.data == 'show_bought_item')
     dp.register_callback_query_handler(assign_photos_callback_handler,
@@ -1262,6 +1287,10 @@ def register_shop_management(dp: Dispatcher) -> None:
                                        lambda c: c.data == 'add_item_choose_cat')
     dp.register_callback_query_handler(delete_category_callback_handler,
                                        lambda c: c.data == 'delete_category')
+    dp.register_callback_query_handler(delete_category_confirm_handler,
+                                       lambda c: c.data.startswith('delete_cat_confirm_'))
+    dp.register_callback_query_handler(delete_category_choose_handler,
+                                       lambda c: c.data.startswith('delete_cat_') and not c.data.startswith('delete_cat_confirm_'))
     dp.register_callback_query_handler(update_category_callback_handler,
                                        lambda c: c.data == 'update_category')
     dp.register_callback_query_handler(create_promo_callback_handler,
@@ -1308,16 +1337,12 @@ def register_shop_management(dp: Dispatcher) -> None:
                                 lambda c: TgConfig.STATE.get(c.from_user.id) == 'update_item_description')
     dp.register_message_handler(update_item_price,
                                 lambda c: TgConfig.STATE.get(c.from_user.id) == 'update_item_price')
-    dp.register_message_handler(delete_str_item,
-                                lambda c: TgConfig.STATE.get(c.from_user.id) == 'process_removing_item')
     dp.register_message_handler(process_item_show,
                                 lambda c: TgConfig.STATE.get(c.from_user.id) == 'show_item')
     dp.register_message_handler(process_category_for_add,
                                 lambda c: TgConfig.STATE.get(c.from_user.id) == 'add_category')
     dp.register_message_handler(process_subcategory_name,
                                 lambda c: TgConfig.STATE.get(c.from_user.id) == 'add_subcategory_name')
-    dp.register_message_handler(process_category_for_delete,
-                                lambda c: TgConfig.STATE.get(c.from_user.id) == 'delete_category')
     dp.register_message_handler(check_category_for_update,
                                 lambda c: TgConfig.STATE.get(c.from_user.id) == 'check_category')
     dp.register_message_handler(check_category_name_for_update,
